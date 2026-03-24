@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FINN Customer Communication Stack</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      background: #F0F2F5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 28px 20px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 20px; font-weight: 700; color: #1a1a1a; margin-bottom: 5px; }
+    .subtitle { font-size: 12px; color: #888; margin-bottom: 20px; }
+    .diagram-wrapper {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 28px rgba(0,0,0,0.09);
+      padding: 28px;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .legend {
+      display: flex;
+      gap: 24px;
+      margin-top: 14px;
+      align-items: center;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: #666;
+    }
+    .tooltip {
+      position: fixed;
+      background: #1a1a1a;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      max-width: 220px;
+      line-height: 1.5;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>FINN Customer Communication Stack</h1>
+  <p class="subtitle">Click any node to highlight its connections · Solid arrows = active triggers · Dashed = data feeds</p>
+  <div class="diagram-wrapper">
+    <svg id="diagram" width="1260" height="540" viewBox="0 0 1260 540"></svg>
+  </div>
+  <div class="legend">
+    <div class="legend-item">
+      <svg width="36" height="14">
+        <line x1="0" y1="7" x2="26" y2="7" stroke="#555" stroke-width="2"/>
+        <polygon points="24,3 34,7 24,11" fill="#555"/>
+      </svg>
+      Active trigger / send
+    </div>
+    <div class="legend-item">
+      <svg width="36" height="14">
+        <line x1="0" y1="7" x2="26" y2="7" stroke="#555" stroke-width="2" stroke-dasharray="5,3"/>
+        <polygon points="24,3 34,7 24,11" fill="#555"/>
+      </svg>
+      Data feed / sync
+    </div>
+  </div>
+  <div class="tooltip" id="tooltip"></div>
+
+<script>
+// ─── Column layout (6 columns) ────────────────────────────────────────────────
+// Dividers at x = 190, 380, 570, 780, 970
+// Col centers:  95,  285,  475,  675,  875, 1115
+// Col labels: Data Sources | Data Layer | Automation | Channels | App | Customer
+
+const nodes = [
+  // ── Col 1: Data Sources ──────────────────────────────────────────────────
+  {
+    id: "gsheets", label: "Google Sheets", sub: "Manual data source",
+    x: 28, y: 70, w: 138, h: 48,
+    color: "#34A853", bg: "#E8F5E9",
+    details: "Holds customer lists that Make scenarios read to bulk-trigger communication workflows."
+  },
+  {
+    id: "bigquery", label: "BigQuery / DWH", sub: "Data warehouse",
+    x: 28, y: 400, w: 138, h: 48,
+    color: "#4285F4", bg: "#EAF1FE",
+    details: "Central data warehouse. Receives comms & ops data from NocoDB, regular contact/deal syncs from HubSpot, and data syncs from Segment. Acts as a Segment source (deal/subscription data). Also connects with Make to provide customer lists for automation scenarios."
+  },
+  // ── Col 2: Data Layer ────────────────────────────────────────────────────
+  {
+    id: "nocodb", label: "NocoDB (Finnoco)", sub: "Comms register & ops DB",
+    x: 215, y: 210, w: 138, h: 48,
+    color: "#E67E22", bg: "#FEF5EC",
+    details: "Receives communication records written back by Make after each scenario runs — covering SendGrid sends, Zendesk triggers, and HubSpot workflow activations. Used to prevent duplicate sends. Also stores fleet/ops data. Feeds into BigQuery."
+  },
+  {
+    id: "segment", label: "Segment", sub: "Customer data platform",
+    x: 215, y: 370, w: 138, h: 48,
+    color: "#52BD94", bg: "#E8F8F2",
+    details: "Customer data platform. Sources: BigQuery (deal/subscription data), SendGrid (email events), Zendesk (support data). Destinations: HubSpot (contact sync) and BigQuery (data sync)."
+  },
+  // ── Col 3: Automation (Make solo) ────────────────────────────────────────
+  {
+    id: "make", label: "Make (Integromat)", sub: "Workflow orchestrator",
+    x: 401, y: 236, w: 138, h: 48,
+    color: "#6B4FBB", bg: "#F0EBFF",
+    details: "finn.integromat.cloud. The central orchestrator. Triggered by HubSpot on deal stage changes, or reads customer lists from Google Sheets and BigQuery. Triggers all four channels: SendGrid (HTML/attachment emails), Zendesk (attachment emails needing CC), HubSpot (workflows & emails), and Retool Workflow API (push notifications). Writes all communication logs back to NocoDB."
+  },
+  // ── Col 4: Channels (senders) ────────────────────────────────────────────
+  {
+    id: "hubspot", label: "HubSpot", sub: "CRM & email sender",
+    x: 601, y: 25, w: 138, h: 48,
+    color: "#FF7A59", bg: "#FFF1ED",
+    details: "Source of truth for Contacts & Deals. Sends both marketing and transactional emails directly to customers. Triggers Make on deal stage changes, and receives triggers back from Make for automated workflows and additional sends. Regularly syncs its contact and deal data to BigQuery to keep the data warehouse up to date."
+  },
+  {
+    id: "zendesk", label: "Zendesk", sub: "Support & attachment sender",
+    x: 601, y: 155, w: 138, h: 48,
+    color: "#03363D", bg: "#E0F0F1",
+    details: "Support platform triggered by Make to send attachment emails that require CC/BCC oversight (e.g. speeding tickets, documents requiring team visibility). Feeds support data into Segment."
+  },
+  {
+    id: "sendgrid", label: "SendGrid", sub: "HTML & attachment sender",
+    x: 601, y: 285, w: 138, h: 48,
+    color: "#1A82E2", bg: "#E8F3FD",
+    details: "Triggered by Make to send HTML and attachment emails. NocoDB logs each send to prevent duplicates. Templates designed in Stripo and exported to SendGrid. Sends email event data to Segment."
+  },
+  {
+    id: "retool", label: "Retool Workflow", sub: "Push notification API",
+    x: 601, y: 415, w: 138, h: 48,
+    color: "#D4450C", bg: "#FFF0EB",
+    details: "Retool Workflow exposing an internal API endpoint. Called by Make to trigger push notifications. Connects directly to the FINN App to deliver push notifications to customers."
+  },
+  // ── Col 5: App ───────────────────────────────────────────────────────────
+  {
+    id: "app", label: "FINN App", sub: "iOS & Android (React Native)",
+    x: 808, y: 380, w: 138, h: 48,
+    color: "#00A86B", bg: "#E6FAF4",
+    details: "Mobile app (iOS & Android, React Native). Receives push notifications via the Retool Workflow API (called by Make). Delivers push notifications directly to customers."
+  },
+  // ── Col 6: Customer ──────────────────────────────────────────────────────
+  {
+    id: "customer", label: "Customer", sub: "End recipient",
+    x: 1000, y: 220, w: 130, h: 48,
+    color: "#7B2D8B", bg: "#F3E8FA",
+    details: "Receives: marketing & transactional emails (HubSpot), HTML/attachment emails (SendGrid), attachment emails with CC (Zendesk), and push notifications (via Retool Workflow & FINN App)."
+  },
+];
+
+nodes.forEach(n => { n.cx = n.x + n.w / 2; n.cy = n.y + n.h / 2; });
+
+const nodeById = {};
+nodes.forEach(n => nodeById[n.id] = n);
+
+const edges = [
+  // ── Data feeds into Make ─────────────────────────────────────────────────
+  {
+    from: "gsheets", to: "make", label: "customer lists",
+    d: "M 166,90 C 272,90 272,252 401,252",
+    lx: 258, ly: 170, dashed: false
+  },
+  {
+    from: "bigquery", to: "make", label: "customer list",
+    d: "M 166,420 C 286,420 286,268 401,268",
+    lx: 270, ly: 348, dashed: true
+  },
+  // ── Data layer plumbing ──────────────────────────────────────────────────
+  {
+    from: "bigquery", to: "segment", label: "data source",
+    d: "M 166,408 L 215,390",
+    lx: 182, ly: 392, dashed: true
+  },
+  {
+    from: "segment", to: "bigquery", label: "data sync",
+    d: "M 215,402 L 166,420",
+    lx: 182, ly: 418, dashed: true
+  },
+  {
+    from: "nocodb", to: "bigquery", label: "comms & ops data",
+    d: "M 284,258 C 284,330 97,330 97,400",
+    lx: 183, ly: 322, dashed: true
+  },
+  // ── Make ↔ NocoDB (log write-back) ──────────────────────────────────────
+  {
+    from: "make", to: "nocodb", label: "writes comms log",
+    d: "M 470,236 C 470,188 284,188 284,210",
+    lx: 376, ly: 182, dashed: false
+  },
+  // ── HubSpot ↔ Make (bidirectional) ──────────────────────────────────────
+  {
+    from: "hubspot", to: "make", label: "deal stage trigger",
+    d: "M 601,42 C 570,42 539,130 539,248",
+    lx: 543, ly: 136, dashed: false
+  },
+  {
+    from: "make", to: "hubspot", label: "triggers workflows & emails",
+    d: "M 539,244 C 556,178 578,96 601,60",
+    lx: 572, ly: 152, dashed: false
+  },
+  // ── Make → channels (fan-out) ────────────────────────────────────────────
+  {
+    from: "make", to: "zendesk", label: "triggers",
+    d: "M 539,256 C 560,238 580,212 601,192",
+    lx: 570, ly: 222, dashed: false
+  },
+  {
+    from: "make", to: "sendgrid", label: "triggers send",
+    d: "M 539,264 C 560,284 580,300 601,305",
+    lx: 569, ly: 282, dashed: false
+  },
+  {
+    from: "make", to: "retool", label: "push API call",
+    d: "M 539,272 C 558,350 578,418 601,435",
+    lx: 563, ly: 354, dashed: false
+  },
+  // ── Retool → App (push delivery) ─────────────────────────────────────────
+  {
+    from: "retool", to: "app", label: "push notifications",
+    d: "M 739,439 C 774,440 778,412 808,404",
+    lx: 774, ly: 420, dashed: false
+  },
+  // ── Segment sources (channels → segment) ─────────────────────────────────
+  {
+    from: "sendgrid", to: "segment", label: "email events",
+    d: "M 601,315 C 510,344 424,378 353,392",
+    lx: 474, ly: 348, dashed: true
+  },
+  {
+    from: "zendesk", to: "segment", label: "support data",
+    d: "M 601,186 C 510,234 424,326 353,390",
+    lx: 472, ly: 294, dashed: true
+  },
+  // ── Segment destinations ──────────────────────────────────────────────────
+  {
+    from: "segment", to: "hubspot", label: "contact sync",
+    d: "M 353,384 C 450,340 540,198 601,62",
+    lx: 466, ly: 244, dashed: true
+  },
+  // ── HubSpot → BigQuery (regular data sync) ───────────────────────────────
+  {
+    from: "hubspot", to: "bigquery", label: "data sync",
+    d: "M 601,38 C 400,15 200,15 97,400",
+    lx: 330, ly: 12, dashed: true
+  },
+  // ── Channels → Customer ───────────────────────────────────────────────────
+  {
+    from: "hubspot", to: "customer", label: "marketing & transactional emails",
+    d: "M 739,49 C 900,28 1000,120 1000,228",
+    lx: 872, ly: 42, dashed: false
+  },
+  {
+    from: "zendesk", to: "customer", label: "attachment + CC email",
+    d: "M 739,179 C 870,158 990,196 1000,236",
+    lx: 866, ly: 158, dashed: false
+  },
+  {
+    from: "sendgrid", to: "customer", label: "attachment email",
+    d: "M 739,309 C 870,306 986,278 1000,248",
+    lx: 866, ly: 300, dashed: false
+  },
+  {
+    from: "app", to: "customer", label: "receives push",
+    d: "M 946,404 C 980,404 1000,360 1000,260",
+    lx: 980, ly: 386, dashed: false
+  },
+];
+
+// ─── SVG setup ────────────────────────────────────────────────────────────────
+const svg = document.getElementById("diagram");
+let selectedNode = null;
+
+const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+function makeMarker(id, color) {
+  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  marker.setAttribute("id", id);
+  marker.setAttribute("markerWidth", "8");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("refX", "7");
+  marker.setAttribute("refY", "3");
+  marker.setAttribute("orient", "auto");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  poly.setAttribute("points", "0 0, 8 3, 0 6");
+  poly.setAttribute("fill", color);
+  marker.appendChild(poly);
+  defs.appendChild(marker);
+}
+nodes.forEach(n => makeMarker("arrow-" + n.id, n.color));
+svg.appendChild(defs);
+
+// Background
+const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+bgRect.setAttribute("width", "1260"); bgRect.setAttribute("height", "540");
+bgRect.setAttribute("fill", "#FAFBFC"); bgRect.setAttribute("rx", "10");
+svg.appendChild(bgRect);
+
+// Column dividers
+[190, 380, 570, 780, 970].forEach(x => {
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("x1", x); line.setAttribute("y1", 16);
+  line.setAttribute("x2", x); line.setAttribute("y2", 524);
+  line.setAttribute("stroke", "#E8E8E8"); line.setAttribute("stroke-width", "1");
+  line.setAttribute("stroke-dasharray", "4,4");
+  svg.appendChild(line);
+});
+
+// Column labels
+[
+  { x: 95,   label: "Data Sources" },
+  { x: 285,  label: "Data Layer" },
+  { x: 470,  label: "Automation" },
+  { x: 670,  label: "Channels" },
+  { x: 877,  label: "App" },
+  { x: 1065, label: "Customer" },
+].forEach(({ x, label }) => {
+  const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  t.setAttribute("x", x); t.setAttribute("y", "14");
+  t.setAttribute("text-anchor", "middle");
+  t.setAttribute("font-size", "9");
+  t.setAttribute("font-weight", "600");
+  t.setAttribute("letter-spacing", "0.08em");
+  t.setAttribute("fill", "#BBBBC0");
+  t.setAttribute("font-family", "Inter, system-ui, sans-serif");
+  t.textContent = label.toUpperCase();
+  svg.appendChild(t);
+});
+
+// ─── Edges ────────────────────────────────────────────────────────────────────
+const edgeEls = [];
+edges.forEach(e => {
+  const src = nodeById[e.from];
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("class", "edge");
+  g.setAttribute("data-from", e.from);
+  g.setAttribute("data-to", e.to);
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", e.d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", src.color);
+  path.setAttribute("stroke-width", "1.8");
+  path.setAttribute("stroke-opacity", "0.6");
+  path.setAttribute("marker-end", `url(#arrow-${e.from})`);
+  if (e.dashed) path.setAttribute("stroke-dasharray", "5,3");
+
+  const lbg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  lbg.setAttribute("fill", "white");
+  lbg.setAttribute("rx", "3");
+  lbg.setAttribute("opacity", "0.85");
+
+  const lt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  lt.setAttribute("x", e.lx); lt.setAttribute("y", e.ly);
+  lt.setAttribute("text-anchor", "middle");
+  lt.setAttribute("font-size", "9.5");
+  lt.setAttribute("fill", src.color);
+  lt.setAttribute("font-family", "Inter, system-ui, sans-serif");
+  lt.setAttribute("font-weight", "500");
+  lt.textContent = e.label;
+
+  g.appendChild(path);
+  g.appendChild(lbg);
+  g.appendChild(lt);
+  svg.appendChild(g);
+  edgeEls.push({ el: g, pathEl: path, labelEl: lt, lbgEl: lbg, edge: e });
+});
+
+setTimeout(() => {
+  edgeEls.forEach(({ labelEl, lbgEl }) => {
+    try {
+      const bb = labelEl.getBBox();
+      lbgEl.setAttribute("x", bb.x - 3);
+      lbgEl.setAttribute("y", bb.y - 1);
+      lbgEl.setAttribute("width", bb.width + 6);
+      lbgEl.setAttribute("height", bb.height + 2);
+    } catch(e) {}
+  });
+}, 50);
+
+// ─── Nodes ────────────────────────────────────────────────────────────────────
+const nodeEls = {};
+const tooltip = document.getElementById("tooltip");
+
+nodes.forEach(n => {
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("class", "node");
+  g.setAttribute("data-id", n.id);
+  g.style.cursor = "pointer";
+
+  const shadow = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  shadow.setAttribute("x", n.x + 2); shadow.setAttribute("y", n.y + 3);
+  shadow.setAttribute("width", n.w); shadow.setAttribute("height", n.h);
+  shadow.setAttribute("rx", "8"); shadow.setAttribute("fill", "rgba(0,0,0,0.06)");
+
+  const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("x", n.x); rect.setAttribute("y", n.y);
+  rect.setAttribute("width", n.w); rect.setAttribute("height", n.h);
+  rect.setAttribute("rx", "8");
+  rect.setAttribute("fill", n.bg);
+  rect.setAttribute("stroke", n.color);
+  rect.setAttribute("stroke-width", "1.8");
+
+  const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  label.setAttribute("x", n.cx); label.setAttribute("y", n.cy - 6);
+  label.setAttribute("text-anchor", "middle");
+  label.setAttribute("font-size", "12"); label.setAttribute("font-weight", "700");
+  label.setAttribute("fill", n.color);
+  label.setAttribute("font-family", "Inter, system-ui, sans-serif");
+  label.textContent = n.label;
+
+  const sub = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  sub.setAttribute("x", n.cx); sub.setAttribute("y", n.cy + 10);
+  sub.setAttribute("text-anchor", "middle");
+  sub.setAttribute("font-size", "9.5"); sub.setAttribute("fill", "#888");
+  sub.setAttribute("font-family", "Inter, system-ui, sans-serif");
+  sub.textContent = n.sub;
+
+  g.appendChild(shadow);
+  g.appendChild(rect);
+  g.appendChild(label);
+  g.appendChild(sub);
+  svg.appendChild(g);
+  nodeEls[n.id] = { g, rect, labelEl: label, node: n };
+
+  g.addEventListener("click", () => handleNodeClick(n.id));
+  g.addEventListener("mouseenter", () => {
+    tooltip.style.display = "block";
+    tooltip.innerHTML = `<strong>${n.label}</strong><br>${n.details}`;
+  });
+  g.addEventListener("mousemove", evt => {
+    tooltip.style.left = (evt.clientX + 14) + "px";
+    tooltip.style.top  = (evt.clientY - 10) + "px";
+  });
+  g.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+});
+
+// ─── Interaction ──────────────────────────────────────────────────────────────
+function handleNodeClick(id) {
+  if (selectedNode === id) { selectedNode = null; resetHighlight(); }
+  else { selectedNode = id; applyHighlight(id); }
+}
+
+function resetHighlight() {
+  Object.values(nodeEls).forEach(({ rect, node }) => {
+    rect.setAttribute("fill", node.bg);
+    rect.setAttribute("stroke-width", "1.8");
+    rect.setAttribute("opacity", "1");
+  });
+  edgeEls.forEach(({ pathEl, labelEl, lbgEl }) => {
+    pathEl.setAttribute("stroke-opacity", "0.6");
+    pathEl.setAttribute("stroke-width", "1.8");
+    labelEl.setAttribute("opacity", "1");
+    lbgEl.setAttribute("opacity", "0.85");
+  });
+}
+
+function applyHighlight(id) {
+  const connected = new Set([id]);
+  edgeEls.forEach(({ edge }) => {
+    if (edge.from === id || edge.to === id) {
+      connected.add(edge.from);
+      connected.add(edge.to);
+    }
+  });
+  Object.values(nodeEls).forEach(({ rect, node }) => {
+    const active = connected.has(node.id);
+    rect.setAttribute("fill", active ? node.bg : "#F5F5F5");
+    rect.setAttribute("stroke-width", node.id === id ? "3" : "1.8");
+    rect.setAttribute("opacity", active ? "1" : "0.3");
+  });
+  edgeEls.forEach(({ pathEl, labelEl, lbgEl, edge }) => {
+    const active = edge.from === id || edge.to === id;
+    pathEl.setAttribute("stroke-opacity", active ? "1" : "0.08");
+    pathEl.setAttribute("stroke-width", active ? "2.5" : "1.8");
+    labelEl.setAttribute("opacity", active ? "1" : "0");
+    lbgEl.setAttribute("opacity", active ? "0.95" : "0");
+  });
+}
+</script>
+</body>
+</html>
