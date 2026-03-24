@@ -94,7 +94,7 @@ const nodes = [
     id: "bigquery", label: "BigQuery / DWH", sub: "Data warehouse",
     x: 28, y: 400, w: 138, h: 48,
     color: "#4285F4", bg: "#EAF1FE",
-    details: "Central data warehouse. Receives comms & ops data from NocoDB. Acts as a Segment source (deal/subscription data) and receives data back from Segment as a destination. Also connects with Make to provide customer lists for automation scenarios."
+    details: "Central data warehouse. Receives comms & ops data from NocoDB, regular contact/deal syncs from HubSpot, and data syncs from Segment. Acts as a Segment source (deal/subscription data). Also connects with Make to provide customer lists for automation scenarios."
   },
   // ── Col 2: Data Layer ────────────────────────────────────────────────────
   {
@@ -121,7 +121,7 @@ const nodes = [
     id: "hubspot", label: "HubSpot", sub: "CRM & email sender",
     x: 601, y: 25, w: 138, h: 48,
     color: "#FF7A59", bg: "#FFF1ED",
-    details: "Source of truth for Contacts & Deals. Sends both marketing and transactional emails directly to customers. Also triggers Make on deal stage changes, and receives triggers back from Make for automated workflows and additional sends."
+    details: "Source of truth for Contacts & Deals. Sends both marketing and transactional emails directly to customers. Triggers Make on deal stage changes, and receives triggers back from Make for automated workflows and additional sends. Regularly syncs its contact and deal data to BigQuery to keep the data warehouse up to date."
   },
   {
     id: "zendesk", label: "Zendesk", sub: "Support & attachment sender",
@@ -245,6 +245,12 @@ const edges = [
     from: "segment", to: "hubspot", label: "contact sync",
     d: "M 353,384 C 450,340 540,198 601,62",
     lx: 466, ly: 244, dashed: true
+  },
+  // ── HubSpot → BigQuery (regular data sync) ───────────────────────────────
+  {
+    from: "hubspot", to: "bigquery", label: "data sync",
+    d: "M 601,38 C 400,15 200,15 97,400",
+    lx: 330, ly: 12, dashed: true
   },
   // ── Channels → Customer ───────────────────────────────────────────────────
   {
